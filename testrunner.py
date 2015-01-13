@@ -33,6 +33,7 @@ def logged(func):
             repr(kwargs)
         )
         return func(*args, **kwargs)
+    return wrapper
 
 
 def get_db(name):
