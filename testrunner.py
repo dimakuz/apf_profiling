@@ -429,16 +429,19 @@ APACHE_TEST = {
     },
 }
 APACHE_USER = 'apache'
+
+MEMCACHED_MEM_SIZE_IN_MB = 128 + 32
+MEMCACHED_KEYS = MEMCACHED_MEM_SIZE_IN_MB * (2 ** 8)
 MEMCACHED_TEST = {
     'setup': functools.partial(
         memcached_setup,
-        count=2**16,
+        count=MEMCACHED_KEYS,
         value_size=2**12
     ),
     'func': memcached_test_mini,
     'kwargs': {
-        'count': 50 * 1000,
-        'key_limit': 2 ** 16,
+        'count': 100 * 1000,
+        'key_limit': MEMCACHED_KEYS,
         'concurrency': 10,
     },
 }
