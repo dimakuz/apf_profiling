@@ -433,6 +433,7 @@ def run_test(test, machine_spec,
                         },
                     )
             vm.ssh(['uname', '-a'])
+            vm.ssh(['dmesg'])
 
             record = {
                 'test': {
