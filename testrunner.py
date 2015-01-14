@@ -266,6 +266,30 @@ def apache_test(vm, requests, concurrency):
     }
 
 
+def node_test(vm, requests, concurrency):
+    vm.ssh('sysctl -w vm.swappiness=0'.split(' '))
+    print 'Running ab'
+    url = 'http://%s:8080/get' % (vm.ip)
+    proc = subprocess.Popen(
+        [
+            'ab',
+            '-k',
+            '-n', str(requests),
+            '-c', str(concurrency),
+            url
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    out, err = proc.communicate()
+    print 'done ab'
+    return {
+        'exitcode': proc.returncode,
+        'stdout': out,
+        'stderr': err
+    }
+
+
 def memcached_setup(vm, count, value_size):
     mms.populate(vm.ip, count, value_size)
 
@@ -425,10 +449,18 @@ APACHE_TEST = {
     'kwargs': {
         'requests': 1000 * 1000,
         'concurrency': 75,
-        'times': 20,
     },
 }
 APACHE_USER = 'apache'
+
+NODE_TEST = {
+    'func': node_test,
+    'kwargs': {
+        'requests': 1000 * 1000,
+        'concurrency': 75,
+    },
+}
+NODE_USER = 'node'
 
 MEMCACHED_MEM_SIZE_IN_MB = 128 + 32
 MEMCACHED_KEYS = MEMCACHED_MEM_SIZE_IN_MB * (2 ** 8)
@@ -449,9 +481,9 @@ MEMCACHED_USER = 'memcached'
 
 TEMPLATE_CLEAN = '/home/shared/fedora20-clean.qcow2.template'
 TEMPLATE_FIX = '/home/shared/fedora20-withfix3.qcow2.template'
-TEMPLATE_NOFIX = '/home/shared/fedora20-withoutfix3.qcow2.template'
+TEMPLATE_NOFIX = '/home/shared/fedora20-withoutfix4.qcow2.template'
 
-ITERS = 10
+ITERS = 1
 
 
 def main(args):
@@ -477,7 +509,7 @@ def main(args):
     for cgroup_limit in MEM_SIZES:
         for i in range(ITERS):
             for template in (
-                    TEMPLATE_FIX,
+                    # TEMPLATE_FIX,
                     TEMPLATE_NOFIX,
             ):
                 while True:
