@@ -303,6 +303,33 @@ def memcached_test_mini(vm, count, key_limit, concurrency):
     return total
 
 
+def pgbench_test(vm, scale, clients, transactions):
+    vm.ssh('sysctl -w vm.swappiness=0'.split(' '))
+    print 'Running pgbench'
+    start = time.time()
+    proc = subprocess.Popen(
+        [
+            'pgbench',
+            '-h', vm.ip,
+            '-U', 'testuser',
+            'test',
+            '-s', str(scale),
+            '-c', str(clients),
+            '-t', str(transactions),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    out, err = proc.communicate()
+    total_time = time.time() - start
+    return {
+        'exitcode': proc.returncode,
+        'stdout': out,
+        'stderr': err,
+        'duration': total_time,
+    }
+
+
 def collect_files(vm, files):
     records = {}
     for path in files:
@@ -478,6 +505,16 @@ MEMCACHED_TEST = {
     },
 }
 MEMCACHED_USER = 'memcached'
+
+POSTGRESQL_TEST = {
+    'func': pgbench_test,
+    'kwargs': {
+        'scale': 100,
+        'clients': 10,
+        'transactions': 450,
+    }
+}
+POSTGRESQL_USER = 'postgres'
 
 TEMPLATE_CLEAN = '/home/shared/fedora20-clean.qcow2.template'
 TEMPLATE_FIX = '/home/shared/fedora20-withfix4.qcow2.template'
