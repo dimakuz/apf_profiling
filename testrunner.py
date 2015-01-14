@@ -447,7 +447,7 @@ HOST_FILES = ['/sys/block/dm-1/stat']
 APACHE_TEST = {
     'func': apache_test,
     'kwargs': {
-        'requests': 1000 * 1000,
+        'requests': 100 * 1000,
         'concurrency': 75,
     },
 }
@@ -456,7 +456,7 @@ APACHE_USER = 'apache'
 NODE_TEST = {
     'func': node_test,
     'kwargs': {
-        'requests': 1000 * 1000,
+        'requests': 100 * 1000,
         'concurrency': 75,
     },
 }
@@ -480,7 +480,7 @@ MEMCACHED_TEST = {
 MEMCACHED_USER = 'memcached'
 
 TEMPLATE_CLEAN = '/home/shared/fedora20-clean.qcow2.template'
-TEMPLATE_FIX = '/home/shared/fedora20-withfix3.qcow2.template'
+TEMPLATE_FIX = '/home/shared/fedora20-withfix4.qcow2.template'
 TEMPLATE_NOFIX = '/home/shared/fedora20-withoutfix4.qcow2.template'
 
 ITERS = 1
@@ -495,12 +495,7 @@ def main(args):
                     'template_path': TEMPLATE_CLEAN,
                     'mem_size': mem_size,
                 },
-                setup=functools.partial(
-                    memcached_setup,
-                    count=2**16,
-                    value_size=2**12
-                ),
-                test=MEMCACHED_TEST,
+                test=NODE_TEST,
                 files=GUEST_FILES,
                 host_files=HOST_FILES,
                 tags=['%d/%d' % (i, ITERS)]
@@ -509,7 +504,7 @@ def main(args):
     for cgroup_limit in MEM_SIZES:
         for i in range(ITERS):
             for template in (
-                    # TEMPLATE_FIX,
+                    TEMPLATE_FIX,
                     TEMPLATE_NOFIX,
             ):
                 while True:
@@ -519,11 +514,11 @@ def main(args):
                                 'template_path': template,
                                 'mem_size': 2048,
                             },
-                            test=MEMCACHED_TEST,
+                            test=NODE_TEST,
                             cgroup_limit=cgroup_limit,
                             perf={
                                 'events': ['sched:kvm_will_halt'],
-                                'user': MEMCACHED_USER,
+                                'user': NODE_USER,
                             },
                             files=GUEST_FILES,
                             host_files=HOST_FILES,
