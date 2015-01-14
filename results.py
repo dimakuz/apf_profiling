@@ -489,6 +489,8 @@ def export_events_ods(path):
     hist = export_events()
     COLUMNS = [
         'Event',
+        'Preempt count',
+        'Stack trace',
         'Total',
         'with_fix',
         'without_fix',
@@ -503,27 +505,21 @@ def export_events_ods(path):
     rows = []
     for event, stats in hist.items():
         rows.append([
-            str(event),
-            str(sum(stats['by_test'].values())),
-            str(sum(
-                stats['apache_with_fix'].values()
-                +
-                stats['memcached_with_fix'].values()
-            )),
-            str(sum(
-                stats['apache_without_fix'].values()
-                +
-                stats['memcached_without_fix'].values()
-            )),
-            str(sum(stats['apache_with_fix'].values())),
-            str(sum(stats['apache_without_fix'].values())),
-            str(sum(stats['memcached_with_fix'].values())),
-            str(sum(stats['memcached_without_fix'].values())),
+            event[0],
+            int(event[1].split('=')[-1]),
+            ','.join([frame[0] for frame in event[2]]),
+            sum(stats['by_test'].values()),
+            stats['by_test'].get('apache_with_fix', 0) + stats['by_test'].get('memcached_with_fix', 0),
+            stats['by_test'].get('apache_without_fix', 0) + stats['by_test'].get('memcached_without_fix', 0),
+            stats['by_test'].get('apache_with_fix', 0),
+            stats['by_test'].get('apache_without_fix', 0),
+            stats['by_test'].get('memcached_with_fix', 0),
+            stats['by_test'].get('memcached_without_fix', 0),
         ] + [
-            stats['by_mem_pressure'][mem_pressure]
+            stats['by_mem_pressure'].get(mem_pressure, 0)
             for mem_pressure in MEM_SIZES
         ])
-    sorted_rows = sorted(rows, key=lambda x: x[1], reverse=True)
+    sorted_rows = sorted(rows, key=lambda x: int(x[3]), reverse=True)
     sheet = ezodf.Sheet('events', size=(4000, 100))
     set_row(sheet, 0, COLUMNS)
     for i, row in enumerate(sorted_rows):
@@ -531,3 +527,4 @@ def export_events_ods(path):
     ods = ezodf.newdoc(doctype='ods', filename=path)
     ods.sheets += sheet
     ods.save()
+export_events_ods('events.ods')
