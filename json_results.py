@@ -1,4 +1,5 @@
 #!/usr/bin/python
+import json
 import os
 
 import pymongo
@@ -15,6 +16,8 @@ MEM_SIZES = (256, 277, 298, 320, 341, 362, 384, 512, 1024, 2048)
 MEM_SIZES = (256, 277, 298, 320, 384, 512, 1024, 2048)
 MEM_SIZES = (256, 298, 341, 384, 512, 1024, 2048)
 # MEM_SIZES = (256, )
+
+ROWS = 20
 
 key_mem_size = lambda x: x['machine_spec']['mem_size']
 key_cgroup_limit = lambda x: x['cgroup_limit']
@@ -255,7 +258,14 @@ def block_stat(cont):
     ]
 
 HOST_SWAP_PATH = '/sys/block/dm-1/stat'
+GUEST_ROOT_PATH = '/sys/block/dm-0/stat'
 GUEST_SWAP_PATH = '/sys/block/dm-1/stat'
+GUEST_RANDFILES_PATH = set(
+    [
+        '/sys/block/dm-2/stat',
+        '/sys/block/dm-3/stat',
+    ],
+)
 
 
 def fix_files(res):
@@ -325,7 +335,7 @@ def memcached_results_to_sheet(name, results):
     print name
     sheet = ezodf.Sheet(name, size=(1000, 100))
     set_row(sheet, 0, LEGEND_MEMCACHED)
-    for row, res in enumerate(map(memcached_res_to_row, results[-20:])):
+    for row, res in enumerate(map(memcached_res_to_row, results[-ROWS:])):
         set_row(sheet, row + 1, res)
     return sheet
 
@@ -460,11 +470,176 @@ def postgresql_res_to_row(res):
     ]
 
 
+def apache_test_parser(res):
+    try:
+        exit_code = res['test']['result']['exitcode'] == 0 and 1 or 0
+    except Exception:
+        exit_code = 0
+
+    try:
+        duration = [
+            float(line.split()[-2])
+            for line in res['test']['result']['stdout'].split('\n')
+            if line.startswith('Time taken for tests')
+        ][0]
+    except Exception:
+        duration = None
+    return {
+        'name': res['test']['name'],
+        'params': {
+            'requests': res['test']['kwargs']['requests'],
+            'concurrency': res['test']['kwargs']['concurrency'],
+        },
+        'results': {
+            'success': exit_code,
+            'duration': duration,
+        },
+    }
+
+
+def memcached_parser(res):
+    return {
+        'name': res['test']['name'],
+        'params': {
+            'count': res['test']['kwargs']['count'],
+            'concurrency': res['test']['kwargs']['concurrency'],
+        },
+        'results': {
+            'success': 1,
+            'duration': res['test']['result'],
+        },
+    }
+
+
+def pgbench_parser(res):
+    try:
+        exit_code = res['test']['result']['exitcode'] == 0 and 1 or 0
+    except Exception:
+        exit_code = 0
+    return {
+        'name': res['test']['name'],
+        'params': {
+            'scale': res['test']['kwargs']['scale'],
+            'clients': res['test']['kwargs']['clients'],
+            'transactions': res['test']['kwargs']['transactions'],
+        },
+        'results': {
+            'success': exit_code,
+            'duration': res['test']['result']['duration'],
+        },
+    }
+
+TEST_PARSERS = {
+    'apache_test': apache_test_parser,
+    'node_test': apache_test_parser,
+    'memcached_test_mini': memcached_parser,
+    'pgbench_test': pgbench_parser,
+}
+
+
+def transform_result(res):
+    fix_files(res['files']['host'])
+    if type(res['files']['guest']['pre']) == list:
+        fix_files(res['files']['guest'])
+
+    host_swap_pre = block_stat(res['files']['host']['pre'][HOST_SWAP_PATH])
+    host_swap_post = block_stat(res['files']['host']['post'][HOST_SWAP_PATH])
+    host_swap_delta = [
+        post - pre for (pre, post) in zip(host_swap_pre, host_swap_post)
+    ]
+
+    try:
+        guest_swap_pre = block_stat(
+            res['files']['guest']['pre'][GUEST_SWAP_PATH]
+        )
+        guest_swap_post = block_stat(
+            res['files']['guest']['post'][GUEST_SWAP_PATH]
+        )
+        guest_swap_delta = [
+            post - pre for (pre, post) in zip(guest_swap_pre, guest_swap_post)
+        ]
+    except KeyError:
+        guest_swap_delta = [None] * 8
+
+    try:
+        guest_root_pre = block_stat(
+            res['files']['guest']['pre'][GUEST_ROOT_PATH]
+        )
+        guest_root_post = block_stat(
+            res['files']['guest']['post'][GUEST_ROOT_PATH]
+        )
+        guest_root_delta = [
+            post - pre for (pre, post) in zip(guest_root_pre, guest_root_post)
+        ]
+    except KeyError:
+        guest_root_delta = [None] * 8
+
+    try:
+        RF = list(
+            set(
+                res['files']['guest']['pre'].keys()
+            ).intersection(GUEST_RANDFILES_PATH)
+        ).pop()
+        guest_rf_pre = block_stat(res['files']['guest']['pre'][RF])
+        guest_rf_post = block_stat(res['files']['guest']['post'][RF])
+        guest_rf_delta = [
+            post - pre for (pre, post) in zip(guest_rf_pre, guest_rf_post)
+        ]
+    except KeyError:
+        guest_rf_delta = [None] * 8
+    events = None
+    events_noirq = None
+    if res['perf']:
+        all_events = list(perf_parse.parse_perf_output(res['perf']['output']))
+        events = len(all_events)
+        events_noirq = len(
+            [
+                e for e in all_events
+                if int(e[1].split('=')[-1].strip()) < 256
+            ]
+        )
+    return {
+        'id': str(res['_id']),
+        'type': res['type'],
+        'memory': {
+            'total': res['machine_spec']['mem_size'],
+            'cgroup_limit': res['cgroup_limit'] or None,
+        },
+        'disk_activity': {
+            'host': {
+                'swap': {
+                    'read': host_swap_delta[0],
+                    'write': host_swap_delta[4],
+                },
+            },
+            'guest': {
+                'swap': {
+                    'read':  guest_swap_delta[0],
+                    'write': guest_swap_delta[4],
+                },
+                'rootfs': {
+                    'read': guest_root_delta[0],
+                    'write': guest_root_delta[4],
+                },
+                'rf': {
+                    'read': guest_rf_delta[0],
+                    'write': guest_rf_delta[4],
+                },
+            },
+        },
+        'test': TEST_PARSERS[res['test']['name']](res),
+        'events': {
+            'total': events,
+            'noirq': events_noirq,
+        },
+    }
+
+
 def apache_results_to_sheet(name, results):
     print name
     sheet = ezodf.Sheet(name, size=(1000, 100))
     set_row(sheet, 0, LEGEND_MEMCACHED)
-    for row, res in enumerate(map(apache_res_to_row, results[-20:])):
+    for row, res in enumerate(map(apache_res_to_row, results[-ROWS:])):
         set_row(sheet, row + 1, res)
     return sheet
 
@@ -473,7 +648,7 @@ def postgresql_results_to_sheet(name, results):
     print name
     sheet = ezodf.Sheet(name, size=(1000, 100))
     set_row(sheet, 0, LEGEND_POSTGRESQL)
-    for row, res in enumerate(map(postgresql_res_to_row, results[-20:])):
+    for row, res in enumerate(map(postgresql_res_to_row, results[-ROWS:])):
         set_row(sheet, row + 1, res)
     return sheet
 
@@ -750,7 +925,7 @@ def export_ods(path):
 
     fill_summary(ods, summary)
     ods.save()
-export_ods('results.ods')
+# export_ods('results.ods')
 
 
 def simplify_event(event):
@@ -853,4 +1028,56 @@ def export_events_ods(path):
     ods = ezodf.newdoc(doctype='ods', filename=path)
     ods.sheets += sheet
     ods.save()
-export_events_ods('events.ods')
+# export_events_ods('events.ods')
+
+
+def add_tags():
+    for tag, cols in {
+        'with_fix': [
+            apache_with_fix,
+            node_with_fix,
+            memcached_with_fix,
+            postgresql_with_fix,
+        ],
+        'without_fix': [
+            apache_without_fix,
+            node_without_fix,
+            memcached_without_fix,
+            postgresql_without_fix,
+        ],
+        'optimum': [
+            apache_optimum,
+            node_optimum,
+            memcached_optimum,
+            postgresql_optimum,
+        ],
+    }.items():
+        for col in cols:
+            for results in col.values():
+                for res in results:
+                    res['type'] = tag
+add_tags()
+
+
+def export_json(path):
+    lst = []
+    for col in [
+        apache_with_fix,
+        apache_without_fix,
+        apache_optimum,
+        node_with_fix,
+        node_without_fix,
+        node_optimum,
+        postgresql_with_fix,
+        postgresql_without_fix,
+        postgresql_optimum,
+        memcached_with_fix,
+        memcached_without_fix,
+        memcached_optimum,
+    ]:
+        for results in col.values():
+            results = results[-ROWS:]
+            lst.extend(map(transform_result, results))
+    with open(path, 'w') as f:
+        json.dump(lst, f, indent=4)
+export_json('test.json')
