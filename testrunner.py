@@ -5,7 +5,7 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
+# import sys
 import tempfile
 import time
 import uuid
@@ -26,11 +26,12 @@ CGROUP_MEM_FMT = (
 def logged(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        logging.info(
-            'Calling %s with %s, %s',
-            func.func_name,
-            repr(args),
-            repr(kwargs)
+        print (
+            'Calling %s with %s, %s' % (
+                func.func_name,
+                repr(args),
+                repr(kwargs)
+            )
         )
         return func(*args, **kwargs)
     return wrapper
@@ -135,6 +136,9 @@ class TestVM:
         for k, v in subs.items():
             template = template.replace('@%s@' % (k.upper()), str(v))
 
+        with open('/tmp/last_dom.xml', 'w') as f:
+            f.write(template)
+
         get_libvirt_conn().createXML(template)
 
     def set_cgroup_memory_limit(self, limit_in_mbytes):
@@ -164,6 +168,7 @@ class TestVM:
     def ssh(self, command, background=False):
         ssh_command = [
             "ssh",
+            "-i", "/home/dkuznets/projects/school/apf/.ssh/id_rsa",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "root@%s" % (self.ip),
@@ -194,6 +199,7 @@ class TestVM:
         command = [
             "scp",
             "-q",
+            "-i", "/home/dkuznets/projects/school/apf/.ssh/id_rsa",
             "-o", "StrictHostKeyChecking no",
             "-o", "UserKnownHostsFile=/dev/null",
             path1,
@@ -222,7 +228,7 @@ class TestVM:
         get_libvirt_conn().lookupByName(self.name).destroy()
 
     def __enter__(self):
-        self.prefix = tempfile.mkdtemp(prefix='/home/shared/',
+        self.prefix = tempfile.mkdtemp(prefix=_PREFIXED('.'),
                                        suffix='-%s' % self.name)
         try:
             os.chmod(self.prefix, 0o777)
@@ -268,6 +274,8 @@ def apache_test(vm, requests, concurrency):
 
 def node_test(vm, requests, concurrency):
     vm.ssh('sysctl -w vm.swappiness=0'.split(' '))
+    vm.ssh('sysctl -w net.nf_conntrack_max=131072'.split(' '))
+    vm.ssh('sysctl -w net.netfilter.nf_conntrack_max=1310720'.split(' '))
     print 'Running ab'
     url = 'http://%s:8080/get' % (vm.ip)
     proc = subprocess.Popen(
@@ -465,6 +473,8 @@ def run_test(test, machine_spec,
             return record
 
 MEM_SIZES = (256, 277, 298, 320, 341, 362, 384, 512, 1024, 2048)
+MEM_SIZES = (256, 298, 341, 384, 512, 1024, 2048)
+MEM_SIZES = (1024, 2048)
 GUEST_FILES = [
     '/sys/block/dm-0/stat',  # root
     '/sys/block/dm-1/stat',  # swap
@@ -517,14 +527,18 @@ POSTGRESQL_TEST = {
 }
 POSTGRESQL_USER = 'postgres'
 
-TEMPLATE_CLEAN = '/home/shared/fedora20-clean.qcow2.template'
-TEMPLATE_FIX = '/home/shared/fedora20-withfix4.qcow2.template'
-TEMPLATE_NOFIX = '/home/shared/fedora20-withoutfix4.qcow2.template'
+_PREFIXED = lambda img: os.path.join(
+    '/home/dkuznets/projects/school/apf-images',
+    img,
+)
+TEMPLATE_CLEAN = _PREFIXED('fedora20-clean.qcow2.template')
+TEMPLATE_FIX = _PREFIXED('fedora20-withfix7.qcow2.template')
+TEMPLATE_NOFIX = _PREFIXED('fedora20-withoutfix7.qcow2.template')
 
-ITERS = 1
+ITERS = 20
 
 
-def main(args):
+def main(test, test_user):
     # do 'optimum' runs
     for mem_size in MEM_SIZES:
         for i in range(ITERS):
@@ -533,18 +547,18 @@ def main(args):
                     'template_path': TEMPLATE_CLEAN,
                     'mem_size': mem_size,
                 },
-                test=NODE_TEST,
+                test=test,
                 files=GUEST_FILES,
                 host_files=HOST_FILES,
                 tags=['%d/%d' % (i, ITERS)]
             )
 
-    for cgroup_limit in MEM_SIZES:
-        for i in range(ITERS):
-            for template in (
-                    TEMPLATE_FIX,
-                    TEMPLATE_NOFIX,
-            ):
+    for template in (
+        TEMPLATE_FIX,
+        TEMPLATE_NOFIX,
+    ):
+        for cgroup_limit in MEM_SIZES:
+            for i in range(ITERS):
                 while True:
                     try:
                         run_test(
@@ -552,11 +566,11 @@ def main(args):
                                 'template_path': template,
                                 'mem_size': 2048,
                             },
-                            test=NODE_TEST,
+                            test=test,
                             cgroup_limit=cgroup_limit,
                             perf={
                                 'events': ['sched:kvm_will_halt'],
-                                'user': NODE_USER,
+                                'user': test_user,
                             },
                             files=GUEST_FILES,
                             host_files=HOST_FILES,
@@ -565,8 +579,15 @@ def main(args):
                         break
                     except Exception:
                         print 'retrying'
+                        logging.exception('a')
+                        continue
+                    except KeyboardInterrupt:
+                        time.sleep(1)
                         continue
 
 
 if __name__ == '__main__':
-    main(sys.argv[1:])
+    # main(APACHE_TEST, APACHE_USER)
+    main(MEMCACHED_TEST, MEMCACHED_USER)
+    # main(NODE_TEST, NODE_USER)
+    # main(POSTGRESQL_TEST, POSTGRESQL_USER)
